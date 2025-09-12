@@ -1,7 +1,9 @@
 project:
   type: website
   output-dir: docs
-
+  resources:
+    - "resume/**" 
+    
 website:
   title: "STA 9750 Submission Material "
   description:

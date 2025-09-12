@@ -3,7 +3,7 @@ title: "Welcome to My STA 9750 Site"
 engine: knitr
 ---
 
-## About Me
+### About Me
 
 Hi! I’m **Arati Kalor**, a Master’s student at Baruch College (MS in Business Analytics).
 
