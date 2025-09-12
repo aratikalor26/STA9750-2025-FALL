@@ -40,7 +40,7 @@ leaflet() |>
 
 ## Resume
 
-[Download Resume](resume/resume.pdf)
+[Download Resume](Material/Arati_Kalor_Resume.pdf)
 
 ```{r}
 #| include: false
