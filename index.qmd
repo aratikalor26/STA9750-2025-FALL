@@ -4,7 +4,8 @@ engine: knitr
 ---
 
 ### About Me
-
+Photo : 
+![](Material/Profile.jpeg){width=200px style="border-radius:50%; display:block; margin:auto;"}
 Hi! I’m **Arati Kalor**, a Master’s student at Baruch College (MS in Business Analytics).
 
 -   📊 Interests: Data Analytics, SQL, Python, Machine Learning\
