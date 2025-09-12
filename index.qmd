@@ -4,15 +4,23 @@ engine: knitr
 ---
 
 ### About Me
-Photo : 
-![](Material/Profile.jpeg){width=200px style="border-radius:50%; display:block; margin:auto;"}
-Hi! I’m **Arati Kalor**, a Master’s student at Baruch College (MS in Business Analytics).
+ 
+<img src="Material/Profile.jpeg" alt="Arati Kalor" style="width:160px; border-radius:50%; display:block; margin:0 auto;">
 
--   📊 Interests: Data Analytics, SQL, Python, Machine Learning\
--   🎓 Expected Graduation: 2026\
--   🌐 LinkedIn: [Your LinkedIn Profile](https://www.linkedin.com/in/arati-kalor/)
+<p style="text-align:center; margin-top:1rem;">
+  Hi, 
+  I’m <strong>Arati Kalor</strong> 👋  
+  A data enthusiast exploring the intersection of analytics and business strategy.
+</p>
 
-This site will host my mini-projects for **STA 9750**.
+
+**Quick facts about me:**
+
+- 📊 Analytics toolkit :  SQL,  Python,  R,  Tableau,  Power BI  
+- 🎓 MS in Business Analytics, Baruch College (Grad. 2026)  
+- 🌐 LinkedIn <a href="https://www.linkedin.com/in/arati-kalor/" target="_blank">Profile</a>  
+- 🧘 Outside work :  yoga,  travel,  reading  
+
 
 ## Where I Study (Map)
 

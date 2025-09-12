@@ -1,6 +1,8 @@
 project:
   type: website
   output-dir: docs
+  resources:
+    - "Material/**"
     
 website:
   title: "STA 9750 Submission Material "
