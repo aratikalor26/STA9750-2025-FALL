@@ -24,3 +24,9 @@ data/**
 # allow my resume PDF
 !resume/resume.pdf
 
+# MP01 data
+data/
+*.tsv
+*.csv
+*.rds
+

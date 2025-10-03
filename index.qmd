@@ -16,10 +16,11 @@ engine: knitr
 
 **Quick facts about me:**
 
-- 📊 Analytics toolkit :  SQL,  Python,  R,  Tableau,  Power BI  
 - 🎓 MS in Business Analytics, Baruch College (Grad. 2026)  
+- 📊 Analytics toolkit :  SQL,  Python,  R,  Tableau,  Power BI  
+- 📄 Resume: [Download here](Material/Arati_Kalor_Resume.pdf) 
 - 🌐 LinkedIn <a href="https://www.linkedin.com/in/arati-kalor/" target="_blank">Profile</a>  
-- 🧘 Outside work :  yoga,  travel,  reading  
+- 🧘 Outside work :  yoga,  travel,  reading 
 
 
 ## Where I Study (Map)
@@ -47,9 +48,7 @@ leaflet() |>
   )
 ```
 
-## Resume
 
-[Download Resume](Material/Arati_Kalor_Resume.pdf)
 
 ```{r}
 #| include: false
