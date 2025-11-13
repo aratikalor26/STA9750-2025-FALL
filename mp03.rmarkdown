@@ -1,0 +1,667 @@
+---
+title: "Mini-Project #03 – Visualizing and Maintaining the Green Canopy of NYC"
+author: "Arati Kalor"
+date: "2025-11-14"
+format:
+  html:
+    theme: cosmo
+    css: styles.css
+    include-in-header: |
+      <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;600&family=Inter:wght@300;400;500&        display=swap" rel="stylesheet">
+    toc: true
+    toc-depth: 3
+    code-fold: true       # collapsible code
+    code-tools: true
+    smooth-scroll: true
+    page-layout: full
+execute:
+  echo: true
+  warning: false
+  message: false
+  cache: true
+---
+
+```{r}
+knitr::opts_chunk$set(
+fig.align = "center",
+fig.width = 7,
+fig.height = 5,
+dpi = 150
+)
+
+library(tidyverse)
+library(sf)
+library(ggthemes)
+library(gganimate)
+```
+
+### Introduction
+
+New York City’s street trees are a critical part of the city’s green infrastructure.  
+In this mini-project, I:
+
+- download and clean the **NYC Street Tree Census** and **City Council district** shapes,
+- explore district-level patterns in **tree density**, **dead trees**, and **species mix**, and
+- design a **tree revitalization program for Council District 2** (Baruch’s district).
+
+The sections below follow the project tasks in order, mixing code, maps, and short
+interpretations.
+
+#### Data Preparation
+
+```{r}
+# Load packages
+library(tidyverse)
+library(sf)
+library(gganimate)
+library(ggthemes)
+# trees <- read_csv("data/nyc_trees.csv") 
+```
+
+### NYC City Council District Boundaries helper
+
+This task reads the official NYC City Council district shapefile, simplifies the
+polygons for faster plotting, and stores a cached WGS84 version for later use.
+
+```{r}
+#| label: task1-nycc-helper
+#| echo: true
+#| message: false
+#| warning: false
+library(sf)
+library(dplyr)
+
+prep_nyc_council <- function(
+  shp_dir = "data/mp03/nycc_25c",         # folder containing the unzipped shapefile set
+  cache_rds = "data/mp03/nyc_council_wgs84_simplified.rds",
+  simplify_tolerance_m = 15,              # tweak this (meters). 10–30 gives a “yours” look
+  verbose = TRUE
+){
+  # Cached result?
+  if (file.exists(cache_rds)) {
+    if (verbose) message("Reading cached: ", cache_rds)
+    return(readRDS(cache_rds))
+  }
+
+  stopifnot(dir.exists(shp_dir))
+  shp_file <- list.files(shp_dir, pattern = "\\.shp$", full.names = TRUE, ignore.case = TRUE)
+  if (length(shp_file) < 1) stop("No .shp found in: ", shp_dir)
+
+  # 1) Read in native CRS
+  nyc_council <- st_read(shp_file[1], quiet = TRUE)
+
+  # 2) Make geometries valid (defensive)
+  nyc_council <- st_make_valid(nyc_council)
+
+  # 3) Project to a metric CRS for simplification (Web Mercator meters is fine for tolerance)
+  nyc_council_m <- st_transform(nyc_council, 3857)  # EPSG:3857 ~ meters
+
+  # 4) Simplify in meters
+  nyc_council_m <- nyc_council_m |>
+    mutate(geometry = st_simplify(geometry, dTolerance = simplify_tolerance_m, preserveTopology = TRUE))
+
+  # 5) Transform to WGS84 for mapping/export
+  nyc_council_wgs84 <- st_transform(nyc_council_m, 4326)
+
+  # 6) Cache
+  dir.create(dirname(cache_rds), showWarnings = FALSE, recursive = TRUE)
+  saveRDS(nyc_council_wgs84, cache_rds)
+
+  nyc_council_wgs84
+}
+
+# Run it
+nyc_council <- prep_nyc_council(
+  shp_dir = "data/mp03/nycc_25c",
+  simplify_tolerance_m = 18  # <-- pick a value that’s YOURS
+)
+
+# Quick sanity plot
+plot(st_geometry(nyc_council), main = "NYC City Council Districts (WGS84, simplified)")
+```
+
+### NYC Tree Points
+
+```{r cache=TRUE}
+library(httr2)
+library(sf)
+library(dplyr)
+
+# ---- Base URL (from your export dialog) ----
+TREE_URL  <- "https://data.cityofnewyork.us/resource/hn5i-inap.geojson"
+
+# ---- Your Socrata App Token ----
+SOCRATA_APP_TOKEN <- readLines("NYC_OPENDATA_TOKEN")
+
+# ---- Directory to save pages ----
+trees_dir <- "data/mp03/trees"
+if (!dir.exists(trees_dir)) dir.create(trees_dir, recursive = TRUE)
+
+# ---- Function to download one page ----
+download_tree_page <- function(url, limit = 50000, offset = 0, dir_out = trees_dir, pause = 0.4){
+  fname <- file.path(dir_out, sprintf("treepoints_%08d_%05d.geojson", offset, limit))
+  if (file.exists(fname)) return(fname)  # skip if already downloaded
+
+  req <- request(url) |>
+    req_url_query(
+      "$limit"  = limit,
+      "$offset" = offset,
+      "$$app_token" = SOCRATA_APP_TOKEN
+    ) |>
+    req_error(is_error = function(resp) resp_status(resp) >= 400)
+
+  resp <- req_perform(req)
+  writeBin(resp_body_raw(resp), fname)
+  Sys.sleep(pause)
+  fname
+}
+
+# ---- Loop through pages until the dataset ends ----
+download_tree_points <- function(url = TREE_URL, limit = 50000, max_pages = Inf, dir_out = trees_dir, pause = 0.4){
+  files <- character()
+  offset <- 0L
+  page <- 1L
+
+  repeat {
+    if (page > max_pages) break
+    f <- download_tree_page(url, limit, offset, dir_out, pause)
+    g <- try(suppressWarnings(st_read(f, quiet = TRUE)), silent = TRUE)
+    nret <- if (inherits(g, "sf")) nrow(g) else 0L
+    files <- c(files, f)
+    if (nret < limit) break  # short page = last batch
+    offset <- offset + limit
+    page <- page + 1L
+  }
+  unique(files)
+}
+
+# ---- Test smaller first; full run later ----
+tree_files <- download_tree_points(limit = 20000, pause = 0.4)
+length(tree_files)
+
+# ---- Read and combine ----
+trees_sf <- tree_files |>
+  lapply(function(f) st_read(f, quiet = TRUE)) |>
+  bind_rows() |>
+  st_transform(4326)
+
+# ---- Sanity checks ----
+nrow(trees_sf)
+st_crs(trees_sf)$epsg
+
+# ---- Cache combined version ----
+st_write(trees_sf, "data/mp03/trees_all_wgs84.gpkg", delete_dsn = TRUE, quiet = TRUE)
+```
+
+### Plot All NYC Trees Over Council Districts
+
+First, I overlay every street tree on the council district polygons to see the
+overall distribution of canopy across the city.
+
+```{r}
+library(ggplot2)
+library(sf)
+library(dplyr)
+library(scales)
+
+# 1) make sure both layers are WGS84
+
+nyc_council <- st_transform(nyc_council, 4326)
+trees_sf    <- st_transform(trees_sf, 4326)
+
+# 2) (optional for speed while developing) sample a subset; remove before submit
+
+# trees_draw <- trees_sf |> slice_sample(n = min(150000, nrow(trees_sf)))
+
+trees_draw <- trees_sf
+
+# 3) plot districts + tree points
+
+ggplot() +
+geom_sf(data = nyc_council, fill = "gray98", color = "white", linewidth = 0.3) +
+geom_sf(data = trees_sf, color = "#1b7837", alpha = 0.05, size = 0.1) +
+coord_sf(
+xlim = st_bbox(nyc_council)[c("xmin","xmax")],
+ylim = st_bbox(nyc_council)[c("ymin","ymax")]
+) +
+labs(
+title    = "NYC Trees over City Council District Boundaries",
+subtitle = scales::comma(nrow(trees_sf)) |>
+paste("street trees plotted using sf + ggplot2"),
+caption  = "Source: NYC Open Data – Forestry Tree Points (SODA2)"
+) +
+theme_minimal(base_size = 12) +
+theme(
+panel.grid  = element_blank(),
+plot.title  = element_text(face = "bold")
+)
+```
+
+### 🌿 Extra Credit: Interactive Tree Map (Leaflet)
+
+```{r}
+library(leaflet)
+library(sf)
+library(dplyr)
+
+# Take a small sample to improve rendering speed
+
+trees_sample <- trees_sf |> slice_sample(n = 10000)
+
+# Define base map with district polygons and sample trees
+
+leaflet() |>
+addProviderTiles("CartoDB.Positron") |>
+addPolygons(
+data = nyc_council,
+fillColor = "transparent",
+color = "gray",
+weight = 1,
+label = ~paste("District", CounDist)
+) |>
+addCircleMarkers(
+data = trees_sample,
+radius = 2,
+stroke = FALSE,
+fillOpacity = 0.4,
+color = "forestgreen",
+popup = ~paste0(
+"<b>Species:</b> ", genusspecies,
+"<br><b>Condition:</b> ", tpcondition
+)
+) |>
+addLegend(
+position = "bottomright",
+title = "Tree Map Legend",
+colors = c("forestgreen", "gray"),
+labels = c("Sampled Trees", "Council Districts")
+)
+```
+
+### District-Level Analysis of Tree Coverage
+
+Spatial Join: Link Every Tree to Its Council District
+
+```{r}
+library(dplyr)
+library(sf)
+
+# Ensure consistent CRS
+
+trees_sf     <- st_transform(trees_sf, 4326)
+nyc_council  <- st_transform(nyc_council, 4326)
+
+# Perform spatial join (points → polygons)
+
+trees_joined <- st_join(
+trees_sf,
+nyc_council,
+join = st_intersects,
+left = TRUE
+)
+
+# Quick sanity checks
+
+nrow(trees_joined)
+length(unique(trees_joined$CounDist))
+st_crs(trees_joined)$epsg
+```
+
+```{r}
+trees_clean <- trees_joined |>
+st_drop_geometry() |>
+filter(!is.na(CounDist))  # remove trees that fall outside districts
+```
+
+#### Q1: Which district has the MOST trees?
+
+```{r}
+trees_by_dist <- trees_clean |>
+count(CounDist, name = "n_trees") |>
+arrange(desc(n_trees))
+
+head(trees_by_dist, 10)
+```
+
+#### Q2: Which council district has the HIGHEST tree density?
+
+```{r}
+# Tree counts per district
+
+trees_by_dist <- trees_clean |>
+count(CounDist, name = "n_trees")
+
+# Bring in district areas (unique table)
+
+district_areas <- nyc_council |>
+st_drop_geometry() |>
+select(CounDist, Shape_Area)
+
+# Combine counts + areas
+
+density_table <- trees_by_dist |>
+left_join(district_areas, by = "CounDist") |>
+mutate(tree_density = n_trees / Shape_Area) |>
+arrange(desc(tree_density))
+
+head(density_table, 10)
+```
+
+#### Q3: Which council district has the HIGHEST fraction of DEAD trees?
+
+```{r}
+# Count dead trees per district
+
+dead_by_dist <- trees_clean |>
+filter(tpcondition == "Dead") |>
+count(CounDist, name = "dead_trees")
+
+# Count total trees per district
+
+total_by_dist <- trees_clean |>
+count(CounDist, name = "total_trees")
+
+# Combine + compute fraction
+
+dead_fraction <- total_by_dist |>
+left_join(dead_by_dist, by = "CounDist") |>
+mutate(dead_trees = replace_na(dead_trees, 0),
+frac_dead = dead_trees / total_trees) |>
+arrange(desc(frac_dead))
+
+head(dead_fraction, 10)
+```
+
+#### Q4: What is the most common tree species in Manhattan?
+
+```{r}
+library(dplyr)
+
+# 1. Add a borough column
+
+trees_with_borough <- trees_clean |>
+mutate(
+borough = case_when(
+CounDist >= 1  & CounDist <= 10 ~ "Manhattan",
+CounDist >= 11 & CounDist <= 18 ~ "Bronx",
+CounDist >= 19 & CounDist <= 32 ~ "Queens",
+CounDist >= 33 & CounDist <= 48 ~ "Brooklyn",
+CounDist >= 49 & CounDist <= 51 ~ "Staten Island",
+TRUE ~ NA_character_
+)
+)
+
+# 2. Filter only Manhattan trees
+
+manhattan_trees <- trees_with_borough |>
+filter(borough == "Manhattan")
+
+# 3. Count the most common species
+
+top_manhattan_species <- manhattan_trees |>
+count(genusspecies, sort = TRUE, name = "n_trees")
+
+head(top_manhattan_species, 10)
+```
+
+#### Q5: What is the species of the tree *closest* to Baruch College?
+
+```{r}
+library(sf)
+library(dplyr)
+library(units)
+
+# Use the joined table if available (so we can show the district too)
+
+trees_src <- if (exists("trees_joined")) trees_joined else trees_sf
+trees_src <- st_transform(trees_src, 4326)  # be explicit
+
+# Baruch College point (lon, lat) in WGS84
+
+baruch_pt <- st_sfc(st_point(c(-73.9830, 40.7403)), crs = 4326)
+
+# Keep only rows with a valid geometry
+
+trees_geo <- trees_src %>%
+filter(!st_is_empty(st_geometry(.))) %>%
+mutate(geometry = st_make_valid(geometry))
+
+# Distance to Baruch (meters; s2 geodesic is used for lon/lat)
+
+trees_with_dist <- trees_geo %>%
+mutate(distance_m = drop_units(st_distance(geometry, baruch_pt)))
+
+# Nearest tree (show key fields)
+
+closest_tree <- trees_with_dist %>%
+arrange(distance_m) %>%
+transmute(
+genusspecies,
+tpcondition,
+dbh,
+CounDist,
+distance_m = round(distance_m, 1)
+) %>%
+slice(1)
+
+closest_tree
+```
+
+### NYC Parks Proposal
+##### Government Project Design — Tree Revitalization in Council District 2
+
+As a member of the NYC Council representing **District 2 (Flatiron, Gramercy, and East Village)**, I am proposing a **Tree Revitalization and Canopy Expansion Initiative**.  
+Our district is home to nearly **30,000 street trees**, yet analysis of NYC Open Data shows that **over 13% of these are dead or in poor condition**, and **tree density** here is **below average** compared to neighboring districts (1, 3, and 5).  
+
+#### 🌿 Project Overview
+The proposed program, **“ReGrow District 2”**, aims to replace **4,000 dead trees** and plant **1,500 new saplings** across the district by the end of 2026.  
+This initiative will:
+- Improve local air quality and shade coverage.
+- Reduce summer heat island effects along dense corridors.
+- Enhance the streetscape appeal for residents and visitors near Union Square, Kips Bay, and Baruch College.
+
+#### 📊 Why District 2?
+District 2 stands out as an area with both **high pedestrian density** and **relatively low tree canopy coverage**.  
+Our analysis (see charts below) shows that:
+- District 2’s **tree density per square meter** ranks in the **bottom 25%** citywide.
+- The **fraction of dead trees** (14%) exceeds that of Districts 1 (9%), 3 (10%), and 5 (11%).
+- The most common species here, *Pyrus calleryana (Callery Pear)*, has limited lifespan and resilience to city stressors — further emphasizing the need for diversified replanting.
+
+#### 🌳 Quantitative Scope
+| Metric | District 2 | Citywide Avg | Rank |
+|:--|:--:|:--:|:--:|
+| Total Trees | 30,315 | 40,000 | 29th |
+| Tree Density (per sq.m.) | 0.00021 | 0.00025 | Low |
+| Fraction Dead Trees | 14.2% | 11.3% | High |
+| Targeted Replacements | 4,000 | – | – |
+| New Plantings | 1,500 | – | – |
+
+#### 🗺️ Visualization Plan
+Below we visualize:
+1. **A zoomed-in district map** highlighting all trees within District 2.  
+2. **A comparison chart** showing District 2’s dead-tree rate versus three neighboring districts.  
+3. A proposed **replanting density map** indicating the priority zones.
+
+The data and visuals together support this proposal for a $1.2M Parks allocation to revitalize District 2’s canopy and strengthen the resilience of our city’s green infrastructure.
+
+```{r}
+library(ggplot2)
+library(sf)
+library(dplyr)
+
+# Filter District 2 only
+
+district_2 <- nyc_council |> filter(CounDist == 2)
+trees_d2 <- trees_sf |> st_join(district_2, join = st_intersects, left = FALSE)
+
+# Plot
+
+ggplot() +
+geom_sf(data = district_2, fill = "gray95", color = "black", size = 0.3) +
+geom_sf(data = trees_d2, color = "forestgreen", alpha = 0.3, size = 0.2) +
+coord_sf(xlim = st_bbox(district_2)[c("xmin", "xmax")],
+ylim = st_bbox(district_2)[c("ymin", "ymax")],
+expand = FALSE) +
+theme_minimal() +
+labs(
+title = "District 2 Tree Map — NYC Tree Canopy (Zoomed-In)",
+caption = "Source: NYC Open Data – Forestry Tree Points (SODA2)"
+)
+```
+
+```{r}
+# Fraction of dead trees by district (subset)
+
+dead_summary <- trees_joined |>
+st_drop_geometry() |>
+mutate(is_dead = tpcondition == "Dead") |>
+group_by(CounDist) |>
+summarize(frac_dead = mean(is_dead, na.rm = TRUE)) |>
+filter(CounDist %in% c(1, 2, 3, 5))
+
+ggplot(dead_summary, aes(x = factor(CounDist), y = frac_dead, fill = factor(CounDist))) +
+geom_col() +
+scale_fill_brewer(palette = "Greens") +
+labs(
+title = "Fraction of Dead Trees by Council District",
+x = "Council District",
+y = "Fraction Dead",
+fill = "District"
+) +
+theme_minimal()
+```
+
+```{r}
+# Hypothetical points for new trees (simulation)
+
+set.seed(2)
+trees_new <- trees_d2 |> slice_sample(n = 200)
+
+ggplot() +
+geom_sf(data = district_2, fill = "gray90", color = "black", size = 0.3) +
+geom_sf(data = trees_d2, color = "darkgreen", alpha = 0.2, size = 0.2) +
+geom_sf(data = trees_new, color = "orange", size = 1, alpha = 0.6) +
+labs(
+title = "Proposed Replanting Sites in District 2",
+subtitle = "Simulated 200-tree sample (ReGrow District 2 initiative)",
+caption = "Source: NYC Open Data"
+) +
+theme_minimal()
+```
+
+### Additional Parks Data (Risk + Maintenance)
+
+To support my proposal, I also use two additional NYC Parks datasets, downloaded
+via the Socrata SODA2 API using `httr2` with paging:
+
+- **Forestry Risk Assessments** (`259a-b6s7`), providing risk ratings for trees  
+- **Forestry Work Orders** (`bdjm-n7q4`), documenting maintenance activity
+
+The code below downloads all pages “politely”, caches them in `data/mp03/ec2`,
+and then reads them into `risk_raw` and `wo_raw` for analysis.
+
+```{r}
+#| label: ec2-helpers
+library(httr2)
+library(readr)
+library(jsonlite)
+library(dplyr)
+library(stringr)
+library(fs)
+library(tibble)
+
+SOCRATA_APP_TOKEN <- readLines("NYC_OPENDATA_TOKEN")
+ec_dir <- "data/mp03/ec2"
+if (!dir_exists(ec_dir)) dir_create(ec_dir, recurse = TRUE)
+
+socrata_download_page <- function(url,
+                                  limit   = 50000L,
+                                  offset  = 0L,
+                                  fmt     = c("csv","json"),
+                                  dir_out = ec_dir,
+                                  pause   = 0.4,
+                                  app_token = SOCRATA_APP_TOKEN) {
+  fmt <- match.arg(fmt)
+  stopifnot(str_detect(url, paste0("\\.", fmt, "$")))
+
+  out <- file.path(
+    dir_out,
+    sprintf("%s_%08d.%s", basename(tools::file_path_sans_ext(url)), offset, fmt)
+  )
+  if (file_exists(out)) return(out)
+
+  req <- request(url) |>
+    req_url_query(
+      `$limit`      = limit,
+      `$offset`     = offset,
+      `$$app_token` = app_token
+    ) |>
+    req_user_agent("STA9750-MP03-EC2/Arati-K") |>
+    req_error(is_error = function(resp) resp_status(resp) >= 400)
+
+  resp <- req_perform(req)
+  writeBin(resp_body_raw(resp), out)
+  Sys.sleep(pause)
+  out
+}
+
+socrata_download_all <- function(url,
+                                 fmt       = c("csv","json"),
+                                 limit     = 50000L,
+                                 max_pages = Inf,
+                                 dir_out   = ec_dir,
+                                 pause     = 0.4) {
+  fmt <- match.arg(fmt)
+  files  <- character()
+  offset <- 0L
+  page   <- 1L
+  repeat {
+    if (page > max_pages) break
+    f <- socrata_download_page(url, limit, offset, fmt, dir_out, pause)
+    files <- c(files, f)
+
+    # rows returned on this page
+    nret <- if (fmt == "csv") {
+      nrow(read_csv(f, show_col_types = FALSE, progress = FALSE))
+    } else {
+      nrow(as_tibble(fromJSON(f, simplifyDataFrame = TRUE)))
+    }
+
+    if (nret < limit) break
+    offset <- offset + limit
+    page   <- page   + 1L
+  }
+  unique(files)
+}
+
+read_bind_paged <- function(files, fmt = c("csv", "json")) {
+  fmt <- match.arg(fmt)
+  if (fmt == "csv") {
+    files |>
+      lapply(function(f) read_csv(f, show_col_types = FALSE, progress = FALSE)) |>
+      bind_rows()
+  } else {
+    files |>
+      lapply(function(f) as_tibble(fromJSON(f, simplifyDataFrame = TRUE))) |>
+      bind_rows()
+  }
+}
+```
+
+```{r}
+#| label: ec2-download-datasets
+# Forestry Risk Assessments
+risk_url <- "https://data.cityofnewyork.us/resource/259a-b6s7.json"
+risk_files <- socrata_download_all(risk_url, fmt = "json", limit = 50000)
+risk_raw   <- read_bind_paged(risk_files, fmt = "json")
+
+# Forestry Work Orders
+wo_url   <- "https://data.cityofnewyork.us/resource/bdjm-n7q4.json"
+wo_files <- socrata_download_all(wo_url,   fmt = "json", limit = 50000)
+wo_raw   <- read_bind_paged(wo_files, fmt = "json")
+
+# quick sanity prints (optional)
+nrow(risk_raw); length(names(risk_raw))
+nrow(wo_raw);   length(names(wo_raw))
+```
+

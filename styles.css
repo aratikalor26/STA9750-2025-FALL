@@ -1,0 +1,42 @@
+body {
+    background-color: #e9f5e1;   /* light leafy green */
+}
+/* Change top navbar color */
+.navbar {
+    background-color: #2E7D32 !important;   /* deep green */
+    border-bottom: 1px solid #1B5E20;
+}
+
+/* Change navbar text color */
+.navbar a, .navbar-brand {
+    color: white !important;
+}
+
+/* Hover effect */
+.navbar a:hover {
+    color: #C8E6C9 !important;  /* light green */
+}
+/* ----- HEADER BAR COLOR ----- */
+.navbar {
+  background-color: #3D6B40 !important;   /* soft forest green */
+  border-color: #3D6B40 !important;
+}
+
+/* ----- CHANGE TITLE FONT ----- */
+h1, h2, h3, h4, h5 {
+  font-family: "Poppins", sans-serif !important;
+}
+
+/* ----- BODY FONT ----- */
+body {
+  font-family: "Inter", sans-serif;
+  background-color: #EEF6EC;  /* soft green background */
+}
+
+/* OPTIONAL: pretty rounded white content boxes */
+main.content {
+  background: #ffffff;
+  padding: 20px;
+  border-radius: 12px;
+  box-shadow: 0 0 12px rgba(0,0,0,0.08);
+}

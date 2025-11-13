@@ -1,0 +1,49 @@
+ACS_TABLES <- tribble(
+    ~concept, ~id, 
+    "total_population", "B01001_001",
+    "total_male_population", "B01001_002",
+    "total_female_population", "B01001_026",
+    "total_white_population", "B01001A_001", 
+    "total_black_population", "B01001B_001",
+    "total_american_indian_population", "B01001C_001",
+    "total_asian_population", "B01001D_001",
+    "total_native_hawaiian_population", "B01001E_001",
+    "total_orther_race_population", "B01001F_001",
+    "total_two_or_more_population", "B01001G_001",
+    "total_hispanic_popoulation", "B01001I_001"
+)
+
+library(tidycensus)
+options(tigris_use_cache = TRUE)
+
+ACS_DATA <- ACS_TABLES |> 
+    pull(id) |> 
+    map(\(table_id) get_acs("county", 
+                            county=c("Queens", 
+                                     "Kings", 
+                                     "Bronx", 
+                                     "New York", 
+                                     "Richmond", 
+                                     "Westchester", 
+                                     "Rockland", 
+                                     "Suffolk", 
+                                     "Nassau", 
+                                     "Dutchess",
+                                     "Putnam",
+                                     "Orange"), 
+                            state="NY", table_id, year=2020, 
+                            geometry=TRUE, cache_table=TRUE, 
+                            keep_geo_vars=TRUE)) |>
+    bind_rows() |> 
+    select(NAME.y, ALAND, AWATER, variable, estimate, geometry) |>
+    rename(county = NAME.y, 
+           land_area = ALAND, 
+           water_area = AWATER, 
+           value = estimate) |>
+    inner_join(ACS_TABLES, join_by(variable == id)) |> 
+    select(-variable) |> 
+    pivot_wider(names_from="concept", 
+                values_from="value") |>
+    mutate(county = str_replace(county, ", New York", ", NY"))
+
+glimpse(ACS_DATA)

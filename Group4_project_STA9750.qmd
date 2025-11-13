@@ -1,0 +1,142 @@
+---
+title: "Project STA 9750 Group 4"
+---
+
+```{r}
+library(tidyverse)
+path <- "project_data"
+
+# Helper: safely coalesce across candidate names (after clean_names)
+pick_num <- function(df, candidates){
+  cols <- intersect(candidates, names(df))
+  if (length(cols) == 0) return(NA_real_)
+  suppressWarnings(as.numeric(dplyr::coalesce(!!!df[cols])))
+}
+pick_chr <- function(df, candidates){
+  cols <- intersect(candidates, names(df))
+  if (length(cols) == 0) return(NA_character_)
+  as.character(dplyr::coalesce(!!!df[cols]))
+}
+
+# 1) Students Social Media Addiction ----------------------------------------
+d1_raw <- readr::read_csv(file.path(path, "Students Social Media Addiction.csv"), show_col_types = FALSE) |>
+  janitor::clean_names()
+
+# Check names if you want:
+# print(names(d1_raw))
+
+d1 <- d1_raw |>
+  transmute(
+    dataset = "students_addiction",
+    age     = pick_num(d1_raw, c("age","age_years","respondent_age")),
+    gender  = factor(pick_chr(d1_raw, c("gender","sex"))),
+    country = pick_chr(d1_raw, c("country","location","nation")),
+    social_media_hours = pick_num(d1_raw, c("avg_daily_usage_hours","average_daily_usage_hours","social_media_hours")),
+    total_screen_hours = NA_real_,
+    sleep_hours        = pick_num(d1_raw, c("sleep_hours_per_night","sleep_hours","sleep_duration")),
+    platform_primary   = pick_chr(d1_raw, c("most_used_platform","primary_platform","platform")),
+    addiction_score    = pick_num(d1_raw, c("addicted_score","addiction_score")),
+    stress_score       = NA_real_,
+    anxiety_score      = NA_real_,
+    depression_score   = NA_real_
+  )
+
+# 2) Tech Gadget Usage and Mental Wellbeing ---------------------------------
+d2_raw <- readr::read_csv(file.path(path, "Tech_Gadget_Usage_and_Mental_Wellbeing.csv"), show_col_types = FALSE) |>
+  janitor::clean_names()
+
+d2 <- d2_raw |>
+  transmute(
+    dataset = "gadget_wellbeing",
+    age     = pick_num(d2_raw, c("age","age_years","respondent_age")),
+    gender  = factor(pick_chr(d2_raw, c("gender","sex"))),
+    country = pick_chr(d2_raw, c("country","location","nation")),
+    social_media_hours = pick_num(d2_raw, c("social_media_hours","social_media_time","sm_hours")),
+    total_screen_hours = pick_num(d2_raw, c("daily_screen_time","screen_time_daily","total_screen_hours")),
+    sleep_hours        = pick_num(d2_raw, c("sleep_duration","sleep_hours","sleep")),
+    platform_primary   = NA_character_,
+    addiction_score    = NA_real_,
+    stress_score       = pick_num(d2_raw, c("stress","stress_score","stress_level")),
+    anxiety_score      = pick_num(d2_raw, c("anxiety","anxiety_score")),
+    depression_score   = pick_num(d2_raw, c("depression","depression_score"))
+  )
+
+# 3) Tech Use Stress Wellness -----------------------------------------------
+d3_raw <- readr::read_csv(file.path(path, "Tech_Use_Stress_Wellness.csv"), show_col_types = FALSE) |>
+  janitor::clean_names()
+
+d3 <- d3_raw |>
+  transmute(
+    dataset = "tech_use_stress",
+    age     = pick_num(d3_raw, c("age","age_years","respondent_age")),
+    gender  = factor(pick_chr(d3_raw, c("gender","sex"))),
+    country = pick_chr(d3_raw, c("country","location","nation")),
+    social_media_hours = pick_num(d3_raw, c("social_media_hours","sm_hours")),
+    total_screen_hours = pick_num(d3_raw, c("daily_screen_time_hours","daily_screen_time","screen_time_daily")),
+    sleep_hours        = pick_num(d3_raw, c("sleep_duration_hours","sleep_duration","sleep_hours")),
+    platform_primary   = NA_character_,
+    addiction_score    = NA_real_,
+    stress_score       = pick_num(d3_raw, c("stress_level","stress","stress_score")),
+    anxiety_score      = pick_num(d3_raw, c("weekly_anxiety_score","anxiety","anxiety_score")),
+    depression_score   = pick_num(d3_raw, c("weekly_depression_score","depression","depression_score"))
+  )
+
+# Combine
+all <- dplyr::bind_rows(d1, d2, d3)
+
+```
+
+Step 2 – Verify your combined dataset
+
+```{r}
+# Quick sanity check
+cat("✅ Data successfully combined!\n")
+str(all)
+all |> count(dataset)
+summary(select(all, age, social_media_hours, stress_score, anxiety_score, depression_score))
+```
+
+Step 3 – Data quality check (for your Check-in Slide #2)
+
+```{r}
+library(skimr)
+
+skim(all)
+
+# Missing percentage summary
+miss_tbl <- all |>
+  summarise(across(where(is.numeric), ~mean(is.na(.))*100, .names="{.col}_missing_pct")) |>
+  pivot_longer(everything(), names_to="variable", values_to="missing_pct") |>
+  arrange(desc(missing_pct))
+
+knitr::kable(head(miss_tbl, 10), digits = 1, caption = "Top Variables by Missing %")
+```
+
+Step 4 – Exploratory plots (for your “Initial Findings” slide)
+
+```{r}
+library(ggplot2)
+# Histogram of social media usage
+ggplot(all, aes(x = social_media_hours, fill = dataset)) +
+  geom_histogram(alpha = 0.6, bins = 30) +
+  facet_wrap(~ dataset, scales = "free_y") +
+  theme_minimal() +
+  labs(title = "Distribution of Social Media Hours by Dataset")
+
+# Relationship: usage hours vs stress
+ggplot(all, aes(x = social_media_hours, y = stress_score, color = dataset)) +
+  geom_point(alpha = 0.4) +
+  geom_smooth(method = "lm", se = FALSE) +
+  labs(title = "Social Media Hours vs Stress Level",
+       x = "Social Media Hours per Day", y = "Stress Score")
+```
+
+Step 5 – Save visuals for presentation
+
+```{r}
+if (!dir.exists("figs")) dir.create("figs")
+
+ggsave("figs/social_hours_hist.png", width = 7, height = 5, dpi = 300)
+ggsave("figs/stress_vs_hours.png", width = 7, height = 5, dpi = 300)
+```
+
