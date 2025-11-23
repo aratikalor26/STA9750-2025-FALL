@@ -40,3 +40,17 @@ main.content {
   border-radius: 12px;
   box-shadow: 0 0 12px rgba(0,0,0,0.08);
 }
+
+/* 🌈 Soft gradient background for the whole report */
+body {
+  background: linear-gradient(to bottom, #e8f8ff, #ffffff);
+  font-family: "Helvetica Neue", Arial, sans-serif;
+}
+
+/* Optional: rounded card style for each section */
+section {
+  background: rgba(255, 255, 255, 0.85);
+  padding: 20px 28px;
+  border-radius: 12px;
+  margin-bottom: 22px;
+}

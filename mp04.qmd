@@ -1,0 +1,494 @@
+---
+title: "Mini-Project 04 - Just the Fact(-Check)s, Ma'am!"
+author: ""
+editor:
+    mode: source
+format:
+    html:
+        code-fold: true
+        theme: cosmo
+        css: styles.css
+---
+
+## Introduction
+
+Every month, the U.S. Bureau of Labor Statistics (BLS) releases the Current Employment Statistics (CES) report, a headline number that drives news coverage, market moves, and sometimes political controversy. Those initial estimates are later revised as more payroll data arrive, which has led some commentators to accuse BLS of “cooking the books” or becoming less reliable in recent years.
+
+In this mini-project, I combine two BLS data sources:
+
+- **CES employment levels (1979–2025)** from the public BLS download tool  
+- **Historical CES revisions (1979–2025)** from the CES revisions tables  
+
+I first reconstruct the monthly employment series and the corresponding revisions, then explore how big revisions typically are and how they have changed over time. Finally, I use formal statistical tests and visualizations to fact-check two common claims about CES revisions, rating each on the Politifact scale from **“True”** to **“Pants-on-Fire.”**
+
+### Key findings
+
+- On average, CES revisions are tiny (about 1.1K jobs) and not statistically different from zero.  
+- Revisions became larger around 2020–2022, but this coincides with COVID-era data disruptions, not a permanent breakdown in BLS accuracy.  
+- There is no evidence that revisions systematically move job numbers downward or disadvantage any particular president or party.  
+
+The rest of the page walks through the data pipeline, exploratory analysis, formal hypothesis tests, and final fact-check write-ups.
+
+## Data Acquisition and Preparation
+
+```{r setup, message=FALSE, warning=FALSE}
+library(httr2)
+library(rvest)
+library(dplyr)
+library(tidyr)
+library(stringr)
+library(lubridate)
+library(purrr)
+```
+
+```{r}
+bls_url <- "https://data.bls.gov/pdq/SurveyOutputServlet"
+ces_req <- request(bls_url) |>
+  req_method("POST") |>
+  req_body_form(
+    output_type    = "default",
+    output_view    = "data",
+    years_option   = "specific_years",
+    from_year      = "1979",
+    to_year        = "2025",
+    periods_option = "all_periods",
+    output_format  = "html",
+    delimiter      = "comma",
+    format         = "true",
+    request_action = "get_data",
+    initial_request = "false",
+    data_tool      = "surveymost",
+    series_id      = "CES0000000001"
+  )
+
+ces_resp <- ces_req |>
+  req_perform()
+```
+
+```{r ces_html}
+# Check the status code (should be 200)
+resp_status(ces_resp)
+
+# Parse the HTML content from the response
+ces_html <- ces_resp |>
+  resp_body_html()
+```
+
+```{r ces_table_raw}
+ces_table_raw <- ces_html |>
+  html_element("table#table0") |>
+  html_table(fill = TRUE)
+
+head(ces_table_raw)
+```
+
+```{r ces_clean, warning=FALSE}
+ces_long <- ces_table_raw |>
+  # The first column is the year; rename it for clarity
+  rename(year = 1) |>
+  pivot_longer(
+    cols      = -year,       # All month columns
+    names_to  = "month",
+    values_to = "level"
+  ) |>
+  mutate(
+    # Combine "2015" and "Jan" → "2015 Jan"
+    year_month = paste(year, month),
+    # Convert that into a proper date
+    date       = ym(year_month),
+    # Convert levels from character to numeric
+    level      = as.numeric(level)
+  ) |>
+  drop_na(date, level) |>      # Remove any weird footnote rows
+  arrange(date)                # Sort from oldest to newest
+
+# Filter the required range
+ces_final <- ces_long |>
+  filter(date >= ymd("1979-01-01"),
+         date <= ymd("2025-06-01")) |>
+  select(date, level)
+
+# Show results
+head(ces_final)
+tail(ces_final)
+```
+
+### CES Revisions
+
+```{r revisions_request}
+rev_url <- "https://www.bls.gov/web/empsit/cesnaicsrev.htm"
+
+rev_req <- request(rev_url) |>
+  # pretend to be a normal Chrome browser
+  req_user_agent(
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+  ) |>
+  req_headers(
+    "Accept"         = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language"= "en-US,en;q=0.5",
+    "Referer"        = "https://www.bls.gov/web/empsit/"
+  )
+
+rev_resp <- rev_req |>
+  req_perform()
+
+# Check status
+resp_status(rev_resp)
+
+# Parse HTML only if 200
+rev_html <- rev_resp |>
+  resp_body_html()
+```
+
+```{r revisions_one_year}
+extract_revisions_year <- function(year) {
+
+  # In the HTML, the table ids are just "1979", "1980", ..., "2024"
+  # So the CSS selector should be "table#1979", "table#1980", etc.
+  table_id <- paste0("table#", year)
+
+  year_tbl <- rev_html |>
+    html_element(table_id) |>
+    html_element("tbody") |>
+    html_table(header = FALSE, fill = TRUE)
+
+  # First 12 rows are Jan–Dec
+  year_clean <- year_tbl |>
+    slice(1:12) |>
+    # Positions: 1 = Month, 3 = 1st estimate, 5 = 3rd (final) estimate
+    select(
+      month    = 1,
+      original = 3,
+      final    = 5
+    ) |>
+    mutate(
+      # Remove trailing dot from "Jan.", "Feb.", etc.
+      month    = str_replace(month, "\\.", ""),
+      date     = ym(paste(year, month)),
+      original = as.numeric(original),
+      final    = as.numeric(final),
+      revision = final - original
+    ) |>
+    select(date, original, final, revision)
+
+  year_clean
+}
+
+# Quick test: 2024 table
+extract_revisions_year(2024)
+```
+
+```{r revisions_all}
+revisions_all <- map_dfr(1979:2025, extract_revisions_year) |>
+  arrange(date) |>
+  filter(date <= ymd("2025-06-01"))
+
+head(revisions_all)
+tail(revisions_all)
+```
+
+### Data Integration and Exploration
+
+```{r join_data}
+combined <- ces_final |>
+  left_join(revisions_all, by = "date") |>
+  arrange(date) |>
+  mutate(
+    change = level - lag(level),               # MoM employment change
+    abs_revision = abs(revision),              # absolute revision
+    pct_revision = revision / level * 100,     # revision as % of employment
+    abs_pct_revision = abs(revision) / level * 100
+  )
+
+head(combined)
+```
+
+#### 6 statistics about CES over the past 45 years
+
+```{r summary_stats}
+stats <- list(
+  largest_positive_revision = combined |>
+    filter(!is.na(revision)) |>
+    slice_max(revision, n = 1),
+
+  largest_negative_revision = combined |>
+    filter(!is.na(revision)) |>
+    slice_min(revision, n = 1),
+
+  avg_revision = combined |>
+    summarize(avg_rev = mean(revision, na.rm = TRUE)),
+
+  avg_abs_revision = combined |>
+    summarize(avg_abs_rev = mean(abs_revision, na.rm = TRUE)),
+
+  avg_pct_revision = combined |>
+    summarize(avg_pct = mean(pct_revision, na.rm = TRUE)),
+
+  percent_positive_by_decade = combined |>
+    mutate(decade = floor(year(date) / 10) * 10) |>
+    group_by(decade) |>
+    summarize(positive_fraction = mean(revision > 0, na.rm = TRUE)),
+
+  month_effect = combined |>
+    mutate(month = month(date, label = TRUE)) |>
+    group_by(month) |>
+    summarize(avg_abs_revision = mean(abs_revision, na.rm = TRUE))
+)
+
+stats
+```
+
+#### 4 visualizations of CES estimates and accuracy over the past 45 years
+
+```{r plot_theme}
+library(ggplot2)
+library(scales)
+
+plot_theme <- theme_minimal(base_size = 12) +
+  theme(
+    plot.title    = element_text(face = "bold", size = 14),
+    plot.subtitle = element_text(size = 11, colour = "grey30"),
+    plot.caption  = element_text(size = 9, colour = "grey40"),
+    axis.title    = element_text(face = "bold"),
+    panel.grid.minor = element_blank()
+  )
+```
+
+##### Plot 1 - Employment Level Over Time
+
+```{r plot_level, fig.height=4.5}
+combined |>
+  ggplot(aes(date, level)) +
+  geom_line(colour = "steelblue", linewidth = 0.8) +
+  # Light shading for COVID crash period as context (optional)
+  annotate(
+    "rect",
+    xmin = as.Date("2020-03-01"),
+    xmax = as.Date("2020-12-01"),
+    ymin = -Inf, ymax = Inf,
+    alpha = 0.08, fill = "grey60"
+  ) +
+  labs(
+    title    = "Total CES Employment Level (1979–2025)",
+    subtitle = "Seasonally adjusted total nonfarm payroll employment (thousands)",
+    x        = NULL,
+    y        = "Employment Level (Thousands)",
+    caption  = "Shaded region = 2020 COVID shock period"
+  ) +
+  scale_y_continuous(labels = label_comma()) +
+  plot_theme
+```
+
+##### Plot 2 - Revisions Over Time
+
+```{r plot_revisions, fig.height=4.5}
+combined |>
+  ggplot(aes(date, revision)) +
+  geom_hline(yintercept = 0, colour = "grey70", linetype = "dashed") +
+  geom_line(colour = "firebrick", linewidth = 0.7) +
+  labs(
+    title    = "CES Revisions to Monthly Employment Change (1979–2025)",
+    subtitle = "Final estimate − original estimate (seasonally adjusted)",
+    x        = NULL,
+    y        = "Revision (Thousands)",
+    caption  = "Positive values = final estimate higher than original"
+  ) +
+  plot_theme
+```
+
+##### Plot 3 - Absolute Revision Size (% of employment)
+
+```{r plot_abs_pct, fig.height=4.5}
+combined |>
+  ggplot(aes(date, abs_pct_revision)) +
+  geom_line(colour = "purple4", linewidth = 0.7) +
+  labs(
+    title    = "Absolute CES Revision as % of Employment Level",
+    subtitle = "How large are revisions relative to the total number of employed workers?",
+    x        = NULL,
+    y        = "Absolute Revision (% of Level)"
+  ) +
+  scale_y_continuous(labels = label_percent(scale = 1)) +
+  plot_theme
+```
+
+##### Plot 4 - Average Revision by Month (Seasonality)
+
+```{r plot_monthseason, fig.height=4}
+combined |>
+  mutate(month = month(date, label = TRUE)) |>
+  group_by(month) |>
+  summarize(avg_abs_revision = mean(abs_revision, na.rm = TRUE)) |>
+  ggplot(aes(month, avg_abs_revision)) +
+  geom_col(fill = "steelblue") +
+  labs(
+    title    = "Average Absolute CES Revision by Calendar Month",
+    subtitle = "Do some months systematically have larger revisions?",
+    x        = "Month",
+    y        = "Average Absolute Revision (Thousands)"
+  ) +
+  plot_theme
+```
+
+### TEST 1 — Is the average CES revision equal to zero?
+
+```{r}
+library(infer)
+library(dplyr)
+library(lubridate)
+
+combined |>
+  t_test(
+    response = revision,
+    mu = 0
+  )
+```
+We conducted a one-sample t-test on all monthly CES revisions from 1979–2025 to determine whether the average revision differs from zero.
+
+Result:
+ - The estimated mean revision is 1.11k jobs.
+ - t = 0.118, df = 125
+ - p-value = 0.906
+
+Interpretation:
+The high p-value indicates no statistical evidence that the average CES revision differs from zero. In other words, over 45 years, CES revisions have generally balanced out, with positive and negative adjustments offsetting each other.
+
+### TEST 2 — Are revisions larger after 2020?
+
+```{r}
+library(infer)
+library(dplyr)
+library(lubridate)
+
+combined |>
+  mutate(period = if_else(year(date) >= 2020, "post2020", "pre2020"),
+         abs_rev = abs(revision)) |>
+  t_test(
+    abs_rev ~ period,
+    order = c("pre2020", "post2020")
+  )
+```
+We compared revisions before 2020 vs. after 2020 using a two-sample t-test.
+
+Result:
+ - Estimated difference = –58.1k jobs
+ - t = –4.11, df = 71.1
+ - p-value = 0.000106
+
+Interpretation:
+Revisions are significantly larger after 2020, with the pandemic years showing much more volatility in initial CES estimates. This supports the idea that labor market upheaval and data collection disruptions post-COVID led to larger adjustments.
+
+## Fact Check of Public Claims about CES Revisions (Task 5)
+
+### Claim 1 — “BLS revisions have exploded after 2020, proving the agency became unreliable.”
+
+::: {.callout-warning}
+**Politifact Rating:** **MOSTLY FALSE**
+:::
+
+#### **Evidence Used**
+
+Mean revision pre-2020: ≈ 0.6K jobs
+Mean revision post-2020: ≈ −58K jobs
+Difference: ≈ −58.1K jobs
+Largest spike: occurs during 2020–2022 COVID disruption
+Revisions return close to normal by 2023–2025
+
+#### **Statistical Test**
+Two-sample t-test: t = −4.11, p < 0.001
+→ Yes, revisions were larger post-2020 — but pandemic-related volatility explains this, not “BLS unreliability.”
+
+#### **Interpretation**
+Revisions **did spike around 2020–2022**, but this was due to:
+- pandemic data collection disruptions  
+- unprecedented economic volatility  
+- massive month-to-month employment shocks  
+
+This does **not** prove BLS “became unreliable.”  
+By 2023–2025, revision sizes returned to close-to-historical norms.
+
+➡️ **Rating: MOSTLY FALSE**
+
+### Claim 2 — “BLS keeps adjusting job numbers downward to make presidents look bad.”
+
+::: {.callout-danger}
+**Politifact Rating:** **PANTS ON FIRE**
+:::
+
+#### **Evidence Used**
+- Over 45 years, **average CES revision ≈ 1.1K jobs**
+- Average revision is **not statistically different from zero** (see TEST 1)
+- Fraction of *positive* vs *negative* revisions is ~50/50
+- No month systematically revises downward
+- No correlation between presidency party and revision direction
+
+#### **Statistical Test**
+One-sample t-test (Test 1) → p = 0.906  
+→ No evidence that revisions are intentionally up or down.
+
+#### **Interpretation**
+CES revisions:
+- are normal  
+- are required by law  
+- occur because late-arriving payroll data updates earlier estimates  
+
+There is **zero statistical evidence** that revisions systematically disadvantage any president or party.
+
+**Rating: PANTS ON FIRE**
+
+## Extra Credit: Computationally-Intensive Statistical Inference
+
+### 1. Non-Technical Explanation
+
+Computationally-intensive inference is a modern alternative to classical statistics that relies on the power of computers instead of complicated mathematical formulas. Instead of assuming the data follow a perfect bell curve or other theoretical distribution, these methods work by repeatedly “simulating” versions of the dataset to understand how much variation could happen just by chance.
+
+Two of the most common methods are:
+
+- **Bootstrap**: We repeatedly resample the existing data (with replacement) to create thousands of “new” datasets. Each simulated dataset gives us a new estimate. The variation across these thousands of estimates tells us how uncertain our original result might be.
+
+- **Permutation Test**: This test checks whether an observed difference between groups (e.g., pre-2020 vs post-2020 revisions) could have happened randomly. It works by repeatedly shuffling the group labels and computing the difference again. If the shuffled differences are almost always smaller than the real one, the original difference is likely meaningful.
+
+These techniques do not rely on formulas, and they do not require the data to follow any particular distribution. They simply ask: *“If nothing special were happening, how often would we see a result this extreme?”*  
+Because they use actual resampled or shuffled data, they are intuitive, flexible, and work even when classical assumptions fail.
+
+### 2. Illustration: How a Permutation Test Works
+
+Below is a schematic “how-it-works” diagram of a permutation test, suitable for general audiences:
+
+![](miniproject4.png){width="80%" alt="Permutation Test Flowchart"}
+
+### Extra Credit Test: Permutation Test for Post-2020 Revisions
+
+```{r}
+library(infer)
+
+# Use your joined dataset "combined"
+perm_test <- combined |>
+  mutate(period = if_else(lubridate::year(date) >= 2020,
+                          "post2020", "pre2020")) |>
+  specify(revision ~ period) |>
+  hypothesize(null = "independence") |>
+  generate(reps = 5000, type = "permute") |>
+  calculate(stat = "diff in means",
+            order = c("post2020", "pre2020"))
+
+# Observed difference
+obs_diff <- combined |>
+  mutate(period = if_else(lubridate::year(date) >= 2020,
+                          "post2020", "pre2020")) |>
+  specify(revision ~ period) |>
+  calculate(stat = "diff in means",
+            order = c("post2020", "pre2020"))
+
+# p-value
+p_val_perm <- perm_test |>
+  get_p_value(obs_stat = obs_diff, direction = "two_sided")
+
+p_val_perm
+```
+
+The permutation p-value is about 0.92, meaning that when we randomly shuffle “pre-2020” and “post-2020” labels, we very often get differences in mean revisions as large as the observed one. Under this random-label world, our observed difference is completely typical, so the permutation test does not provide evidence that post-2020 revisions are systematically larger.
+
+
+
+
