@@ -1,0 +1,266 @@
+---
+title: "Predicting Emotional Well-being from Social Media Habits"
+subtitle: "STA 9750 – Individual Project Report"
+author: "Arati Kalor"
+date: "December 2025"
+
+format:
+  html:
+    theme: flatly
+    toc: true
+    code-fold: true
+    code-tools: true
+    number-sections: false
+    css: styles.css
+
+execute:
+  echo: true
+---
+
+![](Material/Social-Media-And-Unregulated-Emotions.jpg){width=100%}
+
+This report investigates whether social media habits — including daily usage time and platform type — can predict emotional well-being among young adults. Emotional well-being is measured using self-reported stress, anxiety, and addiction scores.
+
+This analysis contributes to our broader project question on whether rising global social media use is associated with worsening mental health outcomes. Understanding these relationships is important for educators, policymakers, and technology designers.
+
+## Specific Question
+
+Can social media habits (usage hours and platform type) predict emotional well-being outcomes such as stress, anxiety, and social media addiction?
+
+## Data Sources
+
+This analysis combines three global survey datasets obtained from Kaggle:
+
+1. Students Social Media Addiction Dataset  
+2. Tech Gadget Usage and Mental Well-being Dataset  
+3. Tech Use, Stress, and Wellness Dataset  
+
+The combined dataset contains approximately 2,900 survey responses from young adults across multiple countries. All datasets include measures of social media usage and at least one psychological well-being indicator.
+
+## Data Acquisition
+
+For this analysis, I use three publicly available survey datasets downloaded from Kaggle:
+
+1. **Students’ Social Media Addiction**  
+2. **Tech Gadget Usage and Mental Wellbeing**  
+3. **Tech Use, Stress, and Wellness**  
+
+Each dataset was downloaded as a CSV file from its Kaggle project page and saved into the `project_data` folder of this STA 9750 project.
+
+```{r}
+library(tidyverse)
+
+# Set data folder path
+path <- "project_data"
+
+# Load raw datasets
+d1_raw <- read_csv(file.path(path, "Students Social Media Addiction.csv"))
+d2_raw <- read_csv(file.path(path, "Tech_Gadget_Usage_and_Mental_Wellbeing.csv"))
+d3_raw <- read_csv(file.path(path, "Tech_Use_Stress_Wellness.csv"))
+```
+
+These CSV files were downloaded manually from Kaggle (which requires a logged-in account) and saved in the `project_data` folder. The code above assumes that a user has placed the same files in that folder with the same filenames, so that the analysis can be reproduced on another machine.
+
+## Data Cleaning and Standardization
+
+The three datasets used in this study were collected independently and contained different variable names, formats, and missing fields. To enable a unified analysis, I standardized key variables across all three datasets into a common structure.
+
+```{r}
+# Clean Dataset 1 - (Students' Social Media Addiction)
+d1 <- d1_raw %>%
+  transmute(
+    dataset = "students_addiction",
+    age = as.numeric(Age),
+    gender = factor(Gender),
+    country = Country,
+    social_media_hours = as.numeric(Avg_Daily_Usage_Hours),
+    total_screen_hours = NA_real_,
+    sleep_hours = as.numeric(Sleep_Hours_Per_Night),
+    platform_primary = Most_Used_Platform,
+    addiction_score = as.numeric(Addicted_Score),
+    stress_score = NA_real_,
+    anxiety_score = NA_real_,
+    depression_score = NA_real_
+  )
+```
+
+```{r}
+pick_num <- function(df, candidates){
+  cols <- intersect(candidates, names(df))
+  if (length(cols) == 0) return(NA_real_)
+  suppressWarnings(as.numeric(dplyr::coalesce(!!!df[cols])))
+}
+```
+
+```{r}
+# Clean Dataset 2 - (Tech Gadget Usage & Mental Wellbeing)
+d2 <- d2_raw %>%
+  transmute(
+    dataset = "gadget_wellbeing",
+    age = pick_num(d2_raw, c("Age", "age")),
+    gender = factor(Gender),
+    country = Country,
+
+    social_media_hours = pick_num(d2_raw, 
+      c("Social.Media.Hours", "Social_Media_Hours", "social_media_hours")),
+
+    total_screen_hours = pick_num(d2_raw, 
+      c("Daily.Screen.Time", "Daily_Screen_Time", "screen_time")),
+
+    sleep_hours = pick_num(d2_raw, 
+      c("Sleep.Duration", "Sleep_Hours", "sleep_hours")),
+
+    platform_primary = NA_character_,
+    addiction_score = NA_real_,
+
+    stress_score = pick_num(d2_raw, c("Stress", "Stress_Score")),
+    anxiety_score = pick_num(d2_raw, c("Anxiety", "Anxiety_Score")),
+    depression_score = pick_num(d2_raw, c("Depression", "Depression_Score"))
+  )
+```
+
+```{r}
+d2 %>% glimpse()
+```
+
+```{r}
+pick_chr <- function(df, candidates){
+  cols <- intersect(candidates, names(df))
+  if (length(cols) == 0) return(NA_character_)
+  as.character(df[[cols[1]]])
+}
+```
+
+```{r}
+# Clean Dataset 3 - (Tech Use, Stress & Wellness)
+d3 <- d3_raw %>%
+  transmute(
+    dataset = "tech_use_stress",
+    
+    age = pick_num(d3_raw, c("Age", "age")),
+    
+    gender = factor(
+      pick_chr(d3_raw, c("Gender", "gender", "sex"))
+    ),
+    
+    country = pick_chr(d3_raw, c("Country", "country", "nation")),
+
+    social_media_hours = pick_num(d3_raw, 
+      c("social_media_hours", "Social_Media_Hours")),
+
+    total_screen_hours = pick_num(d3_raw, 
+      c("daily_screen_time_hours", "screen_time")),
+
+    sleep_hours = pick_num(d3_raw, 
+      c("sleep_duration_hours", "Sleep_Hours")),
+
+    platform_primary = NA_character_,
+    addiction_score = NA_real_,
+
+    stress_score = pick_num(d3_raw, c("stress_level", "Stress")),
+    anxiety_score = pick_num(d3_raw, c("weekly_anxiety_score", "Anxiety")),
+    depression_score = pick_num(d3_raw, c("weekly_depression_score", "Depression"))
+  )
+```
+
+```{r}
+all_clean <- bind_rows(d1, d2, d3)
+glimpse(all_clean)
+```
+
+```{r}
+sq_data <- all_clean %>%
+  filter(
+    !is.na(social_media_hours),
+    !is.na(stress_score) | !is.na(anxiety_score) | !is.na(addiction_score)
+  )
+
+glimpse(sq_data)
+summary(sq_data$social_media_hours)
+```
+
+## USAGE HOURS vs STRESS
+
+```{r}
+ggplot(sq_data, aes(x = social_media_hours, y = stress_score)) +
+  geom_point(
+    color = "#8B3A3A",
+    alpha = 0.35,
+    size = 2
+  ) +
+  geom_smooth(
+    method = "lm",
+    color = "black",
+    linewidth = 1.2,
+    fill = "#B22222",
+    alpha = 0.15
+  ) +
+  labs(
+    title = "Relationship Between Daily Social Media Use and Stress",
+    subtitle = "Higher daily usage is associated with higher stress levels",
+    x = "Daily Social Media Use (Hours)",
+    y = "Stress Score"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title = element_text(face = "bold", size = 16),
+    plot.subtitle = element_text(size = 12),
+    axis.title = element_text(face = "bold"),
+    panel.grid.minor = element_blank()
+  )
+```
+
+**Interpretation:**  
+This figure shows a clear positive relationship between daily social media usage and reported stress levels. As daily usage increases from roughly 0.5 to 4.5 hours, stress scores rise steadily across respondents. The fitted regression line confirms this upward trend, suggesting that heavier daily social media exposure is associated with higher perceived stress. While this visualization alone does not prove causality, it provides strong evidence of a systematic association between usage time and stress.
+
+## PLATFORM vs ADDICTION (CATEGORY EFFECT)
+
+```{r}
+sq_data %>%
+  filter(!is.na(platform_primary), !is.na(addiction_score)) %>%
+  ggplot(aes(x = platform_primary, y = addiction_score, fill = platform_primary)) +
+  geom_boxplot() +
+  labs(
+    title = "Addiction Score by Primary Platform",
+    x = "Primary Platform",
+    y = "Addiction Score"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+**Interpretation:**  
+This boxplot compares social media addiction scores across primary platforms. Visual patterns suggest that visually immersive and entertainment-driven platforms such as Instagram, Snapchat, TikTok, and YouTube tend to exhibit higher median addiction scores compared to platforms with more professional or messaging-oriented use, such as LinkedIn and VKontakte. This indicates that platform design and content type may play an important role in shaping addictive behaviors.
+
+## REGRESSION MODEL
+
+```{r}
+model <- lm(stress_score ~ social_media_hours + sleep_hours + age, data = sq_data)
+summary(model)
+```
+
+**Model Interpretation:**  
+The regression results show that daily social media usage is a strong predictor of stress even after adjusting for sleep duration and age. Each additional hour of social media use is associated with an average increase of approximately **2.21 points in stress score** (p < 0.001). Sleep duration shows a modest protective effect, with more sleep associated with slightly lower stress levels. Age also has a small negative association with stress. The model explains approximately **92% of the variation in stress scores**, indicating a strong statistical fit, though this should be interpreted cautiously due to the self-reported nature of the data.
+
+```{r}
+sq_data <- all_clean %>%
+  filter(!is.na(stress_score),
+         !is.na(social_media_hours),
+         !is.na(sleep_hours),
+         !is.na(age))
+```
+
+
+```{r}
+nrow(sq_data)
+summary(sq_data)
+```
+
+# Limitations
+
+Several limitations should be considered when interpreting the results. First, all three datasets are based on self-reported survey responses, which may introduce recall bias and subjective interpretation of mental health measures. Second, the samples were collected through online survey platforms, meaning that respondents are not guaranteed to be representative of the broader global population. Third, this analysis is cross-sectional in nature and therefore cannot establish causality. It is possible that elevated stress leads to increased social media use rather than the reverse, or that both are influenced by unobserved external factors.
+
+# Conclusion and Contribution to the Overall Project
+
+This analysis provides strong evidence that daily social media usage is closely associated with emotional well-being outcomes, particularly stress. Higher usage hours are linked to significantly elevated stress scores even when accounting for age and sleep duration. Additionally, platform choice appears to influence addiction severity, with entertainment-focused platforms showing higher addictive tendencies. These findings directly support the group’s overarching question by demonstrating that not only the amount of social media use, but also **how and where individuals engage**, is meaningfully connected to mental health outcomes. This reinforces the importance of platform design, usage moderation, and mental health awareness in addressing the psychological effects of social media in young adults.
+
